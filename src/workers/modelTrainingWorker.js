@@ -29,6 +29,7 @@ function makeContext(products, users) {
     // Encontra min/max para normalização posterior
     const minAge = Math.min(...ages)
     const maxAge = Math.max(...ages)
+
     const minPrice = Math.min(...prices)
     const maxPrice = Math.max(...prices)
 
@@ -37,11 +38,13 @@ function makeContext(products, users) {
     const categories = [...new Set(products.map(p => p.category))]
 
     const colorsIndex = Object.fromEntries(
-        colors.map((color, index) => [color, index])
-    )
+        colors.map((color, index) => {
+            return [color, index]
+        }))
     const categoriesIndex = Object.fromEntries(
-        categories.map((category, index) => [category, index])
-    )
+        categories.map((category, index) => {
+            return [category, index]
+        }))
 
     // Calcula a idade média dos compradores por produto
     // Ajuda a criar padrões: produtos para jovens vs. idosos
@@ -62,6 +65,7 @@ function makeContext(products, users) {
             const avg = ageCounts[product.name] ?
                 ageSums[product.name] / ageCounts[product.name] :
                 midAge
+
             return [product.name, normalize(avg, minAge, maxAge)]
         })
     )
@@ -93,12 +97,18 @@ const oneHotWeighted = (index, length, weight) =>
 function encodeProduct(product, context) {
     // Normaliza preço para 0–1 e aplica peso (0.2)
     const price = tf.tensor1d([
-        normalize(product.price, context.minPrice, context.maxPrice) * WEIGHTS.price
+        normalize(
+            product.price,
+            context.minPrice,
+            context.maxPrice
+        ) * WEIGHTS.price
     ])
 
     // Normaliza idade média do produto e aplica peso (0.1)
     const age = tf.tensor1d([
-        (context.productAvgAgeNorm[product.name] ?? 0.5) * WEIGHTS.age
+        (
+            context.productAvgAgeNorm[product.name] ?? 0.5
+        ) * WEIGHTS.age
     ])
 
     // One-hot encoding da categoria com peso (0.4)
@@ -115,12 +125,56 @@ function encodeProduct(product, context) {
         WEIGHTS.color
     )
 
-    // Concatena todas as features em um único vetor
-    return tf.concat1d([price, age, category, color])
+    return tf.concat1d(
+        [price, age, category, color]
+    )
 }
 
-// Treina o modelo com dados dos usuários
-// Calcula vetores para todos os produtos
+function encodeUser(user, context) {
+    if (user.purchases.length) {
+        return tf.stack(
+            user.purchases.map(
+                product => encodeProduct(product, context)
+            )
+        )
+            .mean(0)
+            .reshape([
+                1,
+                context.dimentions
+            ])
+    }
+}
+
+function createTrainingData(context) {
+    const inputs = []
+    const labels = []
+    context.users
+        .filter(u => u.purchases.length)
+        .forEach(user => {
+            const userVector = encodeUser(user, context).dataSync()
+            context.products.forEach(product => {
+                const productVector = encodeProduct(product, context).dataSync()
+
+                const label = user.purchases.some(
+                    purchase => purchase.name === product.name ?
+                        1 :
+                        0
+                )
+                // combinar user + product
+                inputs.push([...userVector, ...productVector])
+                labels.push(label)
+
+            })
+        })
+
+    return {
+        xs: tf.tensor2d(inputs),
+        ys: tf.tensor2d(labels, [labels.length, 1]),
+        inputDimention: context.dimentions * 2
+        // tamanho = userVector + productVector
+    }
+}
+
 async function trainModel({ users }) {
     console.log('Training model with users:', users);
     postMessage({ type: workerEvents.progressUpdate, progress: { progress: 1 } });
@@ -143,13 +197,17 @@ async function trainModel({ users }) {
     // Armazena contexto globalmente para usar em recomendações
     _globalCtx = context
 
+    const trainData = createTrainingData(context)
+    debugger
+
     postMessage({ type: workerEvents.progressUpdate, progress: { progress: 100 } });
     postMessage({ type: workerEvents.trainingComplete });
 }
 
 // Função para gerar recomendações para um usuário (implementar)
 function recommend({ user }) {
-    // TODO: Implementar lógica de recomendação usando vetores
+
+
 }
 
 // Mapeia ações para handlers correspondentes
